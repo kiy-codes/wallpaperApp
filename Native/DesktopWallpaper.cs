@@ -17,13 +17,11 @@ public sealed record MonitorInfo(int Index, string Id, Rectangle Bounds);
 
 /// <summary>
 /// Wraps the IDesktopWallpaper COM object (Windows 8+), the same API the Personalize page uses.
-/// Everything it changes is per-user, so no administrator rights are needed.
+/// The app only reads from it: the monitor list, and the Windows wallpaper for diagnostics.
 /// </summary>
 public sealed class DesktopWallpaper : IDisposable
 {
     static readonly Guid ClsidDesktopWallpaper = new("C2CF3110-460E-4FC1-B9D0-8A1C0C9CC4BD");
-    const string IidShellItem = "43826D1E-E718-42EE-BC55-A1E261C37BFE";
-    const string IidShellItemArray = "B63EA76D-1F85-456F-A19C-48159EFA858B";
 
     readonly IDesktopWallpaper _com;
 
@@ -35,16 +33,9 @@ public sealed class DesktopWallpaper : IDisposable
         return new DesktopWallpaper((IDesktopWallpaper)Activator.CreateInstance(type)!);
     }
 
-    public WallpaperPosition Position
-    {
-        get => _com.GetPosition();
-        set => _com.SetPosition(value);
-    }
+    public WallpaperPosition Position => _com.GetPosition();
 
     public SlideshowState Status => _com.GetStatus();
-
-    /// <summary>Sets the wallpaper on one monitor, or on all of them when <paramref name="monitorId"/> is null.</summary>
-    public void SetWallpaper(string? monitorId, string path) => _com.SetWallpaper(monitorId, path);
 
     public string GetWallpaper(string? monitorId) => _com.GetWallpaper(monitorId);
 
@@ -70,37 +61,7 @@ public sealed class DesktopWallpaper : IDisposable
         return monitors;
     }
 
-    /// <summary>Starts the built-in Windows slideshow from a folder. Windows keeps rotating it after this app exits.</summary>
-    public void SetSlideshowFolder(string folder)
-    {
-        var iidItem = new Guid(IidShellItem);
-        var iidArray = new Guid(IidShellItemArray);
-        IntPtr item = IntPtr.Zero, array = IntPtr.Zero;
-        try
-        {
-            SHCreateItemFromParsingName(folder, IntPtr.Zero, ref iidItem, out item);
-            SHCreateShellItemArrayFromShellItem(item, ref iidArray, out array);
-            _com.SetSlideshow(array);
-        }
-        finally
-        {
-            if (array != IntPtr.Zero) Marshal.Release(array);
-            if (item != IntPtr.Zero) Marshal.Release(item);
-        }
-    }
-
-    public void SetSlideshowOptions(bool shuffle, TimeSpan interval) =>
-        _com.SetSlideshowOptions(shuffle ? SlideshowOptions.ShuffleImages : SlideshowOptions.None, (uint)interval.TotalMilliseconds);
-
-    public void AdvanceSlideshow() => _com.AdvanceSlideshow(null, SlideshowDirection.Forward);
-
     public void Dispose() => Marshal.ReleaseComObject(_com);
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
-    static extern void SHCreateItemFromParsingName(string path, IntPtr bindContext, ref Guid riid, out IntPtr item);
-
-    [DllImport("shell32.dll", PreserveSig = false)]
-    static extern void SHCreateShellItemArrayFromShellItem(IntPtr item, ref Guid riid, out IntPtr array);
 
     [StructLayout(LayoutKind.Sequential)]
     struct NativeRect { public int Left, Top, Right, Bottom; }

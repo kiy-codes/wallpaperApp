@@ -170,7 +170,7 @@ internal sealed class MainForm : Form
             {
                 _status.Text = _draft.Mode == WallpaperMode.Video
                     ? "Videos play the same on every monitor."
-                    : "Slideshows use one folder; Windows shows a different picture on each monitor.";
+                    : "Slideshows show the same picture on every monitor.";
                 Silently(() => _layout.SelectedIndex = (int)_draft.Layout);
                 return;
             }
@@ -293,16 +293,8 @@ internal sealed class MainForm : Form
         UseWaitCursor = true;
         try
         {
-            if (_app.Apply(_draft.Clone(), _startWithWindows.Checked) is { } problem)
-            {
-                _status.Text = "Saved, but not showing.";
-                MessageBox.Show(this, $"Your settings were saved, but the wallpaper isn't showing.{Environment.NewLine}{Environment.NewLine}{problem}",
-                    Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            else
-            {
-                _status.Text = "Applied.";
-            }
+            _app.Apply(_draft.Clone(), _startWithWindows.Checked);
+            _status.Text = "Applied.";
         }
         catch (Exception ex)
         {

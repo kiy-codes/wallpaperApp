@@ -35,8 +35,8 @@ internal sealed class TrayApplication : ApplicationContext
         _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowSettings(); };
 
         _hotkey.Pressed += NextImage;
-        VideoWallpaper.Failed += Notify;
-        VideoWallpaper.DesktopReset += ReapplyVideo;
+        DesktopOverlay.Failed += Notify;
+        DesktopOverlay.DesktopReset += ReapplyAfterExplorerRestart;
         RegisterHotkey();
         UpdateMenu();
 
@@ -52,8 +52,8 @@ internal sealed class TrayApplication : ApplicationContext
         else ShowSettings();
     }
 
-    /// <summary>Applies and saves the settings. Returns why the wallpaper isn't showing, or null if it worked.</summary>
-    public string? Apply(AppConfig config, bool startWithWindows)
+    /// <summary>Applies and saves the settings.</summary>
+    public void Apply(AppConfig config, bool startWithWindows)
     {
         WallpaperService.Apply(config, _storage);
         config.Save(_storage.ConfigPath);
@@ -62,50 +62,17 @@ internal sealed class TrayApplication : ApplicationContext
         _storage.Cleanup(config);
         RegisterHotkey();
         UpdateMenu();
-
-        // The video is our own window, so wallpaper policies and Spotlight don't hide it.
-        if (config.Mode == WallpaperMode.Video) return null;
-        if (WallpaperService.GetBlockReason() is { } reason) return reason;
-        if (WallpaperService.IsSpotlightActive())
-            return "Windows Spotlight is on and replaces this wallpaper. Turn it off in Settings > Personalization > Background.";
-        if (!WallpaperService.IsApplied(config, _storage))
-            return "Windows accepted the change but didn't keep it. Something else on this PC controls the wallpaper, usually a company policy or another wallpaper app (such as BgInfo or Lively).";
-        CheckAgainLater(config);
-        return null;
-    }
-
-    /// <summary>Management tools often put their wallpaper back a few seconds later, so look again.</summary>
-    void CheckAgainLater(AppConfig config)
-    {
-        var timer = new System.Windows.Forms.Timer { Interval = 10_000 };
-        timer.Tick += (_, _) =>
-        {
-            timer.Dispose();
-            if (!ReferenceEquals(config, _config)) return; // settings were applied again since
-            try
-            {
-                if (!WallpaperService.IsApplied(config, _storage))
-                    Notify("Your wallpaper was changed back a few seconds after applying. Something on this PC, usually a company policy or management tool, keeps resetting it.");
-            }
-            catch (System.Runtime.InteropServices.COMException) { }
-        };
-        timer.Start();
     }
 
     public IReadOnlyList<string> GetWarnings()
     {
         var warnings = new List<string>();
-        bool video = _config.Mode == WallpaperMode.Video;
-        if (video)
-            warnings.Add("The video only plays while Wallpaper App is running in the tray.");
-        else if (WallpaperService.GetBlockReason() is { } blockReason)
-            warnings.Add(blockReason);
+        if (_config.HasWallpaper && !StartupManager.IsEnabled)
+            warnings.Add("Your wallpaper only shows while Wallpaper App is running. Turn on \"Start with Windows\" to bring it back after you sign in.");
         if (_storage.UsingFallback)
             warnings.Add($"This folder can't be written to, so settings and pictures are kept in {_storage.DataDir}.");
         if (_storage.OnRemovableDrive)
             warnings.Add("Running from a removable drive. If it's unplugged or its drive letter changes, the wallpaper and \"Start with Windows\" can stop working.");
-        if (!video && WallpaperService.IsSpotlightActive())
-            warnings.Add("Windows Spotlight is on and will replace this wallpaper. Turn it off in Settings > Personalization > Background.");
         if (_hotkeyError is not null)
             warnings.Add(_hotkeyError);
         return warnings;
@@ -133,10 +100,7 @@ internal sealed class TrayApplication : ApplicationContext
         catch (Exception ex) { Notify($"Couldn't skip to the next picture: {ex.Message}"); }
     }
 
-    /// <summary>
-    /// Re-applies the saved wallpaper after sign-in. Explorer may not be ready yet, so this retries for ~30 seconds.
-    /// A running slideshow is left alone so it doesn't restart from the first picture.
-    /// </summary>
+    /// <summary>Shows the saved wallpaper after sign-in. Explorer may not be ready yet, so this retries for ~30 seconds.</summary>
     void ApplyAtStartup()
     {
         if (!_config.HasWallpaper) return;
@@ -147,8 +111,7 @@ internal sealed class TrayApplication : ApplicationContext
         {
             try
             {
-                if (!(_config.Mode == WallpaperMode.Slideshow && WallpaperService.IsSlideshowRunning()))
-                    WallpaperService.Apply(_config, _storage);
+                WallpaperService.Apply(_config, _storage);
                 retry.Dispose();
             }
             catch (Exception ex)
@@ -169,29 +132,28 @@ internal sealed class TrayApplication : ApplicationContext
     void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
         _ui.BeginInvoke(() => { _displayChangedTimer.Stop(); _displayChangedTimer.Start(); });
 
-    /// <summary>Explorer restarted, which closes the video window.</summary>
-    void ReapplyVideo()
+    /// <summary>Explorer restarted, which closes the wallpaper windows.</summary>
+    void ReapplyAfterExplorerRestart()
     {
-        if (_config is not { Mode: WallpaperMode.Video, HasWallpaper: true }) return;
-        // Explorer needs a moment to rebuild the desktop before the video can go behind the icons again.
+        if (!_config.HasWallpaper) return;
+        // Explorer needs a moment to rebuild the desktop before the wallpaper can go behind the icons again.
         var timer = new System.Windows.Forms.Timer { Interval = 2000 };
         timer.Tick += (_, _) =>
         {
             timer.Dispose();
             try { WallpaperService.Apply(_config, _storage); }
-            catch (Exception ex) { Notify($"Couldn't restart the video after Explorer restarted: {ex.Message}"); }
+            catch (Exception ex) { Notify($"Couldn't bring the wallpaper back after Explorer restarted: {ex.Message}"); }
         };
         timer.Start();
     }
 
     /// <summary>
-    /// A monitor was plugged in, removed or rearranged: per-monitor pictures need to be re-matched,
-    /// and video windows resized to the new monitors.
+    /// A monitor was plugged in, removed or rearranged: the wallpaper windows are re-sized to the new monitors
+    /// and per-monitor pictures re-matched.
     /// </summary>
     void OnDisplaysChanged()
     {
-        if (_config is { Mode: WallpaperMode.Image, Layout: MonitorLayout.PerMonitor, HasWallpaper: true }
-            or { Mode: WallpaperMode.Video, HasWallpaper: true })
+        if (_config.HasWallpaper && DesktopOverlay.IsShowing)
         {
             try { WallpaperService.Apply(_config, _storage); }
             catch (Exception ex) { Notify($"Couldn't update the wallpaper for the new monitor layout: {ex.Message}"); }
@@ -211,9 +173,9 @@ internal sealed class TrayApplication : ApplicationContext
     protected override void ExitThreadCore()
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
-        VideoWallpaper.Failed -= Notify;
-        VideoWallpaper.DesktopReset -= ReapplyVideo;
-        VideoWallpaper.Stop();
+        DesktopOverlay.Failed -= Notify;
+        DesktopOverlay.DesktopReset -= ReapplyAfterExplorerRestart;
+        DesktopOverlay.Stop();
         _showWait.Unregister(null);
         _hotkey.Dispose();
         _tray.Visible = false;

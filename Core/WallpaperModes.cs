@@ -3,30 +3,27 @@ using WallpaperApp.Native;
 
 namespace WallpaperApp.Core;
 
-/// <summary>One way of putting something on the desktop.</summary>
+/// <summary>One way of putting something on the desktop. Every mode draws through <see cref="DesktopOverlay"/>.</summary>
 public interface IWallpaperMode
 {
-    void Apply(DesktopWallpaper wallpaper, AppConfig config, PortableStorage storage);
+    void Apply(List<MonitorInfo> monitors, AppConfig config, PortableStorage storage);
 }
 
 public sealed class ImageMode : IWallpaperMode
 {
-    public void Apply(DesktopWallpaper wallpaper, AppConfig config, PortableStorage storage)
+    public void Apply(List<MonitorInfo> monitors, AppConfig config, PortableStorage storage)
     {
         if (config.Layout == MonitorLayout.PerMonitor)
         {
             // Check every file before changing anything, so a missing picture doesn't leave a half-applied desktop.
-            var assignments = wallpaper.GetMonitors()
-                .Select(m => (m.Id, Path: RequireImage(storage, config.ImageFor(m.Id, m.Index))))
-                .ToList();
-            wallpaper.Position = config.Fit.ToPosition();
-            foreach (var (id, path) in assignments) wallpaper.SetWallpaper(id, path);
+            var paths = monitors.Select(m => RequireImage(storage, config.ImageFor(m.Id, m.Index))).ToList();
+            DesktopOverlay.ShowPictures(monitors.Select(m => m.Bounds).ToList(), paths, config.Fit);
             return;
         }
 
         var image = RequireImage(storage, config.Image);
-        wallpaper.Position = config.Layout == MonitorLayout.Span ? WallpaperPosition.Span : config.Fit.ToPosition();
-        wallpaper.SetWallpaper(null, image);
+        var areas = WallpaperService.AreasFor(monitors, config.Layout);
+        DesktopOverlay.ShowPictures(areas, areas.Select(_ => image).ToList(), WallpaperService.FitFor(config));
     }
 
     static string RequireImage(PortableStorage storage, string? relative)
@@ -40,33 +37,29 @@ public sealed class ImageMode : IWallpaperMode
 
 public sealed class SlideshowMode : IWallpaperMode
 {
-    public void Apply(DesktopWallpaper wallpaper, AppConfig config, PortableStorage storage)
+    public void Apply(List<MonitorInfo> monitors, AppConfig config, PortableStorage storage)
     {
         if (config.SlideshowFolder is null) throw new InvalidOperationException("Choose a slideshow folder first.");
         var folder = storage.Resolve(config.SlideshowFolder);
-        if (PortableStorage.ListImages(folder).Count == 0)
+        var images = PortableStorage.ListImages(folder);
+        if (images.Count == 0)
             throw new InvalidOperationException($"The slideshow folder is missing or has no pictures: {folder}");
 
-        wallpaper.SetSlideshowFolder(folder);
-        wallpaper.SetSlideshowOptions(config.Shuffle, TimeSpan.FromMinutes(Math.Clamp(config.SlideshowMinutes, 1, 1440)));
-        wallpaper.Position = config.Layout == MonitorLayout.Span ? WallpaperPosition.Span : config.Fit.ToPosition();
+        DesktopOverlay.ShowSlideshow(WallpaperService.AreasFor(monitors, config.Layout), images, config.Shuffle,
+            TimeSpan.FromMinutes(Math.Clamp(config.SlideshowMinutes, 1, 1440)), WallpaperService.FitFor(config));
     }
 }
 
-/// <summary>Plays a video behind the desktop icons on every monitor, or once across all of them.</summary>
+/// <summary>Plays a video on every monitor, or once across all of them.</summary>
 public sealed class VideoMode : IWallpaperMode
 {
-    public void Apply(DesktopWallpaper wallpaper, AppConfig config, PortableStorage storage)
+    public void Apply(List<MonitorInfo> monitors, AppConfig config, PortableStorage storage)
     {
         if (string.IsNullOrEmpty(config.Video)) throw new InvalidOperationException("Choose a video first.");
         var path = storage.Resolve(config.Video);
         if (!File.Exists(path)) throw new FileNotFoundException($"This video is missing: {path}", path);
 
-        var areas = wallpaper.GetMonitors().Select(m => m.Bounds).ToList();
-        if (areas.Count == 0) throw new InvalidOperationException("No monitors found.");
-        bool span = config.Layout == MonitorLayout.Span;
-        if (span) areas = [areas.Aggregate(Rectangle.Union)];
-        VideoWallpaper.Play(path, areas, span ? FitStyle.Fill : config.Fit);
+        DesktopOverlay.ShowVideo(WallpaperService.AreasFor(monitors, config.Layout), path, WallpaperService.FitFor(config));
     }
 }
 
@@ -74,26 +67,26 @@ public static class WallpaperService
 {
     public static void Apply(AppConfig config, PortableStorage storage)
     {
-        using var wallpaper = DesktopWallpaper.Create();
-        if (config.Mode != WallpaperMode.Video) VideoWallpaper.Stop();
-        ModeFor(config.Mode).Apply(wallpaper, config, storage);
+        List<MonitorInfo> monitors;
+        using (var wallpaper = DesktopWallpaper.Create()) monitors = wallpaper.GetMonitors();
+        if (monitors.Count == 0) throw new InvalidOperationException("No monitors found.");
+        ModeFor(config.Mode).Apply(monitors, config, storage);
     }
 
-    public static bool IsSlideshowRunning()
-    {
-        using var wallpaper = DesktopWallpaper.Create();
-        return wallpaper.Status.HasFlag(SlideshowState.Slideshow);
-    }
+    public static void NextImage() => DesktopOverlay.NextSlide();
 
-    public static void NextImage()
-    {
-        using var wallpaper = DesktopWallpaper.Create();
-        wallpaper.AdvanceSlideshow();
-    }
+    /// <summary>One area per monitor, or a single area covering all of them when spanning.</summary>
+    internal static List<Rectangle> AreasFor(List<MonitorInfo> monitors, MonitorLayout layout) =>
+        layout == MonitorLayout.Span
+            ? [monitors.Select(m => m.Bounds).Aggregate(Rectangle.Union)]
+            : monitors.Select(m => m.Bounds).ToList();
+
+    /// <summary>Spanning ignores the fit setting and fills the combined area, like Windows does.</summary>
+    internal static FitStyle FitFor(AppConfig config) => config.Layout == MonitorLayout.Span ? FitStyle.Fill : config.Fit;
 
     /// <summary>
-    /// Why Windows won't show our wallpaper even though it accepts the change, or null if nothing is in the way.
-    /// Work and school PCs often force a wallpaper; reading these settings needs no admin rights.
+    /// Why Windows won't show its own wallpaper, or null if nothing is in the way. Our overlay draws over it either way,
+    /// so this is only reported in the diagnostics. Reading these settings needs no admin rights.
     /// </summary>
     public static string? GetBlockReason()
     {
@@ -120,22 +113,6 @@ public static class WallpaperService
         }
         catch (System.Runtime.InteropServices.COMException) { }
         return null;
-    }
-
-    /// <summary>Reads the wallpaper back to check that Windows kept what was just applied.</summary>
-    public static bool IsApplied(AppConfig config, PortableStorage storage)
-    {
-        if (config.Mode == WallpaperMode.Video) return VideoWallpaper.IsPlaying;
-        using var wallpaper = DesktopWallpaper.Create();
-        if (config.Mode == WallpaperMode.Slideshow) return wallpaper.Status.HasFlag(SlideshowState.Slideshow);
-
-        foreach (var monitor in wallpaper.GetMonitors())
-        {
-            var expected = config.Layout == MonitorLayout.PerMonitor ? config.ImageFor(monitor.Id, monitor.Index) : config.Image;
-            if (expected is null || !string.Equals(wallpaper.GetWallpaper(monitor.Id), storage.Resolve(expected), StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-        return true;
     }
 
     /// <summary>Read-only report of the wallpaper settings and policies, for troubleshooting without a command prompt.</summary>
@@ -171,7 +148,7 @@ public static class WallpaperService
         {
             lines.Add($"Wallpaper API error: {ex.Message}");
         }
-        lines.Add($"Video playing: {VideoWallpaper.IsPlaying}");
+        lines.Add($"Overlay showing: {DesktopOverlay.IsShowing}");
         lines.Add($"Block detected: {GetBlockReason() ?? "none"}");
         return string.Join(Environment.NewLine, lines);
     }
@@ -195,22 +172,6 @@ public static class WallpaperService
             return null;
         }
     }
-
-    /// <summary>Spotlight replaces any wallpaper we set. BackgroundType 3 is what Windows 11 writes when it's on.</summary>
-    public static bool IsSpotlightActive()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers");
-        return key?.GetValue("BackgroundType") is int type && type == 3;
-    }
-
-    public static WallpaperPosition ToPosition(this FitStyle fit) => fit switch
-    {
-        FitStyle.Fit => WallpaperPosition.Fit,
-        FitStyle.Stretch => WallpaperPosition.Stretch,
-        FitStyle.Center => WallpaperPosition.Center,
-        FitStyle.Tile => WallpaperPosition.Tile,
-        _ => WallpaperPosition.Fill,
-    };
 
     static IWallpaperMode ModeFor(WallpaperMode mode) => mode switch
     {
