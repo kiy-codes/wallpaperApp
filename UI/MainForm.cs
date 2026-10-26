@@ -255,8 +255,16 @@ internal sealed class MainForm : Form
         UseWaitCursor = true;
         try
         {
-            _app.Apply(_draft.Clone(), _startWithWindows.Checked);
-            _status.Text = "Applied.";
+            if (_app.Apply(_draft.Clone(), _startWithWindows.Checked) is { } problem)
+            {
+                _status.Text = "Saved, but not showing.";
+                MessageBox.Show(this, $"Your settings were saved, but the wallpaper isn't showing.{Environment.NewLine}{Environment.NewLine}{problem}",
+                    Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                _status.Text = "Applied.";
+            }
         }
         catch (Exception ex)
         {

@@ -50,7 +50,8 @@ internal sealed class TrayApplication : ApplicationContext
         else ShowSettings();
     }
 
-    public void Apply(AppConfig config, bool startWithWindows)
+    /// <summary>Applies and saves the settings. Returns why the wallpaper isn't showing, or null if it worked.</summary>
+    public string? Apply(AppConfig config, bool startWithWindows)
     {
         WallpaperService.Apply(config, _storage);
         config.Save(_storage.ConfigPath);
@@ -59,11 +60,20 @@ internal sealed class TrayApplication : ApplicationContext
         _storage.Cleanup(config);
         RegisterHotkey();
         UpdateMenu();
+
+        if (WallpaperService.GetBlockReason() is { } reason) return reason;
+        if (WallpaperService.IsSpotlightActive())
+            return "Windows Spotlight is on and replaces this wallpaper. Turn it off in Settings > Personalization > Background.";
+        if (!WallpaperService.IsApplied(config, _storage))
+            return "Windows accepted the change but didn't keep it. Something else on this PC controls the wallpaper, usually a company policy or another wallpaper app (such as BgInfo or Lively).";
+        return null;
     }
 
     public IReadOnlyList<string> GetWarnings()
     {
         var warnings = new List<string>();
+        if (WallpaperService.GetBlockReason() is { } blockReason)
+            warnings.Add(blockReason);
         if (_storage.UsingFallback)
             warnings.Add($"This folder can't be written to, so settings and pictures are kept in {_storage.DataDir}.");
         if (_storage.OnRemovableDrive)

@@ -73,6 +73,62 @@ public static class WallpaperService
         wallpaper.AdvanceSlideshow();
     }
 
+    /// <summary>
+    /// Why Windows won't show our wallpaper even though it accepts the change, or null if nothing is in the way.
+    /// Work and school PCs often force a wallpaper; reading these settings needs no admin rights.
+    /// </summary>
+    public static string? GetBlockReason()
+    {
+        const string systemPolicy = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+        const string desktopPolicy = @"Software\Microsoft\Windows\CurrentVersion\Policies\ActiveDesktop";
+        foreach (var hive in new[] { Registry.CurrentUser, Registry.LocalMachine })
+        {
+            if (ReadValue(hive, systemPolicy, "Wallpaper") is string { Length: > 0 })
+                return "Your organization sets the wallpaper through Group Policy, so Windows shows theirs instead.";
+            if (ReadValue(hive, desktopPolicy, "NoChangingWallPaper") is 1)
+                return "Your organization has turned off wallpaper changes through Group Policy.";
+        }
+        if (ReadValue(Registry.LocalMachine, @"Software\Microsoft\Windows\CurrentVersion\PersonalizationCSP", "DesktopImageStatus") is 1)
+            return "Your organization sets the wallpaper through device management (Intune), so Windows shows theirs instead.";
+
+        try
+        {
+            using var wallpaper = DesktopWallpaper.Create();
+            if (wallpaper.Status.HasFlag(SlideshowState.DisabledByRemoteSession))
+                return "This is a Remote Desktop or virtual desktop session, where Windows turns off wallpapers.";
+        }
+        catch (System.Runtime.InteropServices.COMException) { }
+        return null;
+    }
+
+    /// <summary>Reads the wallpaper back to check that Windows kept what was just applied.</summary>
+    public static bool IsApplied(AppConfig config, PortableStorage storage)
+    {
+        using var wallpaper = DesktopWallpaper.Create();
+        if (config.Mode == WallpaperMode.Slideshow) return wallpaper.Status.HasFlag(SlideshowState.Slideshow);
+
+        foreach (var monitor in wallpaper.GetMonitors())
+        {
+            var expected = config.Layout == MonitorLayout.PerMonitor ? config.ImageFor(monitor.Id, monitor.Index) : config.Image;
+            if (expected is null || !string.Equals(wallpaper.GetWallpaper(monitor.Id), storage.Resolve(expected), StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        return true;
+    }
+
+    static object? ReadValue(RegistryKey hive, string path, string name)
+    {
+        try
+        {
+            using var key = hive.OpenSubKey(path);
+            return key?.GetValue(name);
+        }
+        catch (System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Spotlight replaces any wallpaper we set. BackgroundType 3 is what Windows 11 writes when it's on.</summary>
     public static bool IsSpotlightActive()
     {
