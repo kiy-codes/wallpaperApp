@@ -24,6 +24,7 @@ internal sealed class MainForm : Form
 
     readonly RadioButton _imageMode = new() { Text = "Picture", AutoSize = true };
     readonly RadioButton _slideshowMode = new() { Text = "Slideshow", AutoSize = true };
+    readonly RadioButton _videoMode = new() { Text = "Video", AutoSize = true };
     readonly ComboBox _layout = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     readonly ComboBox _fit = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100 };
     readonly MonitorPreview _preview = new() { Size = new Size(540, 210), Margin = new Padding(3, 6, 3, 6) };
@@ -33,6 +34,9 @@ internal sealed class MainForm : Form
     readonly GroupBox _slideshowGroup = Group("Slideshow");
     readonly Button _chooseFolder = new() { Text = "Choose folder…", AutoSize = true };
     readonly Label _folderLabel = InfoLabel();
+    readonly GroupBox _videoGroup = Group("Video");
+    readonly Button _chooseVideo = new() { Text = "Choose video…", AutoSize = true };
+    readonly Label _videoLabel = InfoLabel();
     readonly NumericUpDown _interval = new() { Minimum = 1, Maximum = 1440, Width = 70 };
     readonly CheckBox _shuffle = new() { Text = "Shuffle", AutoSize = true, Margin = new Padding(12, 6, 3, 3) };
     readonly TextBox _hotkey = new() { Width = 160, ReadOnly = true, BackColor = SystemColors.Window, ShortcutsEnabled = false };
@@ -72,6 +76,7 @@ internal sealed class MainForm : Form
         {
             _imageMode.Checked = _draft.Mode == WallpaperMode.Image;
             _slideshowMode.Checked = _draft.Mode == WallpaperMode.Slideshow;
+            _videoMode.Checked = _draft.Mode == WallpaperMode.Video;
             _layout.SelectedIndex = (int)_draft.Layout;
             _fit.SelectedIndex = (int)_draft.Fit;
             _interval.Value = Math.Clamp(_draft.SlideshowMinutes, 1, 1440);
@@ -104,6 +109,10 @@ internal sealed class MainForm : Form
         slideshowPanel.Controls.Add(Row(Caption("Change picture every"), _interval, Caption("minutes"), _shuffle));
         _slideshowGroup.Controls.Add(slideshowPanel);
 
+        var videoRow = Row(_chooseVideo, _videoLabel);
+        videoRow.Dock = DockStyle.Fill;
+        _videoGroup.Controls.Add(videoRow);
+
         var clearHotkey = new Button { Text = "Clear", AutoSize = true };
         clearHotkey.Click += (_, _) => { _hotkey.Text = ""; _draft.Hotkey = ""; };
 
@@ -112,17 +121,24 @@ internal sealed class MainForm : Form
             FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Dock = DockStyle.Fill,
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 8, 0, 0),
         };
-        buttons.Controls.AddRange([_close, _apply, _status]);
+        var diagnostics = new LinkLabel { Text = "Copy diagnostics", AutoSize = true, Margin = new Padding(3, 9, 3, 3) };
+        diagnostics.LinkClicked += (_, _) =>
+        {
+            Clipboard.SetText(WallpaperService.GetDiagnostics());
+            _status.Text = "Diagnostics copied. Paste them anywhere.";
+        };
+        buttons.Controls.AddRange([_close, _apply, _status, diagnostics]);
 
         var root = new TableLayoutPanel
         {
             ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(12),
         };
-        root.Controls.Add(Row(Caption("Show"), _imageMode, _slideshowMode));
+        root.Controls.Add(Row(Caption("Show"), _imageMode, _slideshowMode, _videoMode));
         root.Controls.Add(Row(Caption("Monitors"), _layout, Caption("Fit"), _fit));
         root.Controls.Add(_preview);
         root.Controls.Add(_imageGroup);
         root.Controls.Add(_slideshowGroup);
+        root.Controls.Add(_videoGroup);
         root.Controls.Add(Row(Caption("\"Next image\" hotkey"), _hotkey, clearHotkey));
         root.Controls.Add(_startWithWindows);
         root.Controls.Add(_warnings);
@@ -132,24 +148,29 @@ internal sealed class MainForm : Form
 
     void WireEvents()
     {
-        _imageMode.CheckedChanged += (_, _) =>
-        {
-            if (_loading) return;
-            _draft.Mode = _imageMode.Checked ? WallpaperMode.Image : WallpaperMode.Slideshow;
-            if (_draft.Mode == WallpaperMode.Slideshow && _draft.Layout == MonitorLayout.PerMonitor)
+        foreach (var radio in new[] { _imageMode, _slideshowMode, _videoMode })
+            radio.CheckedChanged += (_, _) =>
             {
-                _draft.Layout = MonitorLayout.SameOnAll;
-                Silently(() => _layout.SelectedIndex = (int)_draft.Layout);
-            }
-            RefreshView();
-        };
+                if (_loading || !radio.Checked) return;
+                _draft.Mode = radio == _slideshowMode ? WallpaperMode.Slideshow
+                    : radio == _videoMode ? WallpaperMode.Video
+                    : WallpaperMode.Image;
+                if (_draft.Mode != WallpaperMode.Image && _draft.Layout == MonitorLayout.PerMonitor)
+                {
+                    _draft.Layout = MonitorLayout.SameOnAll;
+                    Silently(() => _layout.SelectedIndex = (int)_draft.Layout);
+                }
+                RefreshView();
+            };
         _layout.SelectedIndexChanged += (_, _) =>
         {
             if (_loading) return;
             var layout = (MonitorLayout)_layout.SelectedIndex;
-            if (layout == MonitorLayout.PerMonitor && _draft.Mode == WallpaperMode.Slideshow)
+            if (layout == MonitorLayout.PerMonitor && _draft.Mode != WallpaperMode.Image)
             {
-                _status.Text = "Slideshows use one folder; Windows shows a different picture on each monitor.";
+                _status.Text = _draft.Mode == WallpaperMode.Video
+                    ? "Videos play the same on every monitor."
+                    : "Slideshows use one folder; Windows shows a different picture on each monitor.";
                 Silently(() => _layout.SelectedIndex = (int)_draft.Layout);
                 return;
             }
@@ -167,6 +188,7 @@ internal sealed class MainForm : Form
         _preview.MonitorClicked += index => { _selectedMonitor = index; RefreshView(); };
         _chooseImage.Click += (_, _) => ChooseImage();
         _chooseFolder.Click += (_, _) => ChooseFolder();
+        _chooseVideo.Click += (_, _) => ChooseVideo();
         _hotkey.KeyDown += OnHotkeyKeyDown;
         _apply.Click += (_, _) => ApplyDraft();
         _close.Click += (_, _) => Close();
@@ -176,17 +198,19 @@ internal sealed class MainForm : Form
     void RefreshView()
     {
         bool slideshow = _draft.Mode == WallpaperMode.Slideshow;
-        bool perMonitor = !slideshow && _draft.Layout == MonitorLayout.PerMonitor;
+        bool video = _draft.Mode == WallpaperMode.Video;
+        bool perMonitor = _draft.Mode == WallpaperMode.Image && _draft.Layout == MonitorLayout.PerMonitor;
         bool span = _draft.Layout == MonitorLayout.Span;
         if (_selectedMonitor >= _monitors.Count) _selectedMonitor = 0;
 
-        _imageGroup.Visible = !slideshow;
+        _imageGroup.Visible = !slideshow && !video;
         _slideshowGroup.Visible = slideshow;
+        _videoGroup.Visible = video;
         _fit.Enabled = !span;
 
         var slideshowFolder = _draft.SlideshowFolder is null ? null : _storage.Resolve(_draft.SlideshowFolder);
         List<string> slideshowImages = slideshowFolder is null ? [] : PortableStorage.ListImages(slideshowFolder);
-        var shared = Thumbnail(slideshow ? slideshowImages.FirstOrDefault() : _draft.Image);
+        var shared = video ? null : Thumbnail(slideshow ? slideshowImages.FirstOrDefault() : _draft.Image);
 
         _preview.Monitors = _monitors;
         _preview.Fit = _draft.Fit;
@@ -211,6 +235,7 @@ internal sealed class MainForm : Form
         _folderLabel.Text = slideshowFolder is null
             ? "No folder chosen"
             : $"{Path.GetFileName(slideshowFolder)} ({slideshowImages.Count} pictures)";
+        _videoLabel.Text = _draft.Video is null ? "No video chosen" : Path.GetFileName(_draft.Video);
 
         UpdateWarnings();
     }
@@ -245,6 +270,19 @@ internal sealed class MainForm : Form
         UseWaitCursor = true;
         try { _draft.SlideshowFolder = _storage.ImportFolder(dialog.SelectedPath); }
         catch (Exception ex) { ShowError("Couldn't use that folder.", ex); }
+        finally { UseWaitCursor = false; }
+        _status.Text = "";
+        RefreshView();
+    }
+
+    void ChooseVideo()
+    {
+        using var dialog = new OpenFileDialog { Title = "Choose a video", Filter = PortableStorage.VideoFilter };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        UseWaitCursor = true;
+        try { _draft.Video = _storage.ImportVideo(dialog.FileName); }
+        catch (Exception ex) { ShowError("Couldn't copy the video.", ex); }
         finally { UseWaitCursor = false; }
         _status.Text = "";
         RefreshView();

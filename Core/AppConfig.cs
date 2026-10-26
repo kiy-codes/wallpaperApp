@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace WallpaperApp.Core;
 
-public enum WallpaperMode { Image, Slideshow }
+public enum WallpaperMode { Image, Slideshow, Video }
 
 public enum MonitorLayout { SameOnAll, PerMonitor, Span }
 
@@ -35,12 +35,16 @@ public sealed class AppConfig
     public string? SlideshowFolder { get; set; }
     public int SlideshowMinutes { get; set; } = 30;
     public bool Shuffle { get; set; } = true;
+    public string? Video { get; set; }
     public string Hotkey { get; set; } = "Ctrl+Alt+N";
 
     [JsonIgnore]
-    public bool HasWallpaper => Mode == WallpaperMode.Slideshow
-        ? SlideshowFolder is not null
-        : Image is not null || MonitorImages.Count > 0;
+    public bool HasWallpaper => Mode switch
+    {
+        WallpaperMode.Slideshow => SlideshowFolder is not null,
+        WallpaperMode.Video => Video is not null,
+        _ => Image is not null || MonitorImages.Count > 0,
+    };
 
     /// <summary>
     /// Picture for one monitor: matched by device path, then by position, then the shared image.
@@ -63,6 +67,7 @@ public sealed class AppConfig
         if (Image is not null) yield return Image;
         foreach (var m in MonitorImages) yield return m.Image;
         if (SlideshowFolder is not null) yield return SlideshowFolder;
+        if (Video is not null) yield return Video;
     }
 
     public AppConfig Clone() =>

@@ -4,6 +4,7 @@ A portable Windows app for setting the desktop wallpaper. There's no installer, 
 
 - **Picture:** one picture on every monitor, a different picture per monitor, or one picture stretched across all monitors.
 - **Slideshow:** rotates through a folder of pictures. Windows runs the slideshow itself, so it keeps going after the app exits.
+- **Video:** plays an MP4 on a muted loop behind the desktop icons, on every monitor or stretched across all of them. Unlike pictures, the video only plays while the app is running in the tray.
 - **Next image:** skip to the next picture from the tray menu or a hotkey (Ctrl+Alt+N by default).
 - **Start with Windows:** a checkbox that re-applies your wallpaper when you sign in. It uses the per-user startup list, which you can also see in Task Manager > Startup.
 
@@ -24,8 +25,6 @@ dotnet publish -c Release -o publish
 This produces a single self-contained `publish\WallpaperApp.exe` that runs without .NET installed.
 
 ## Code layout
-- `Native/`: Windows API wrappers. `IDesktopWallpaper` sets the wallpaper and slideshow; `RegisterHotKey` handles the hotkey.
-- `Core/`: settings, portable storage, the picture and slideshow modes (`IWallpaperMode`), and the startup entry.
+- `Native/`: Windows API wrappers. `IDesktopWallpaper` sets the wallpaper and slideshow; `DesktopHost` puts the video window behind the desktop icons; `RegisterHotKey` handles the hotkey.
+- `Core/`: settings, portable storage, the picture, slideshow and video modes (`IWallpaperMode`), the video player (`VideoWallpaper`, using WPF's `MediaElement`), and the startup entry.
 - `UI/`: the tray app, the settings window and the monitor preview.
-
-A video wallpaper mode would be a new `IWallpaperMode` in `Core/WallpaperModes.cs`.

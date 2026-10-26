@@ -15,6 +15,11 @@ public sealed class PortableStorage
     public static string ImageFilter =>
         "Pictures|" + string.Join(";", ImageExtensions.Select(e => "*" + e)) + "|All files|*.*";
 
+    public static readonly string[] VideoExtensions = [".mp4", ".m4v"];
+
+    public static string VideoFilter =>
+        "MP4 videos|" + string.Join(";", VideoExtensions.Select(e => "*" + e)) + "|All files|*.*";
+
     public PortableStorage() : this(AppContext.BaseDirectory) { }
 
     public PortableStorage(string appDir)
@@ -41,17 +46,23 @@ public sealed class PortableStorage
     string WallpapersDir => Path.Combine(DataDir, "wallpapers");
     string ImagesDir => Path.Combine(WallpapersDir, "images");
     string SlideshowsDir => Path.Combine(WallpapersDir, "slideshows");
+    string VideosDir => Path.Combine(WallpapersDir, "videos");
 
     public string Resolve(string path) => Path.GetFullPath(Path.Combine(DataDir, path));
 
     /// <summary>Copies a picture into the data folder (reusing an identical copy) and returns its relative path.</summary>
-    public string ImportImage(string source)
+    public string ImportImage(string source) => ImportFile(source, ImagesDir);
+
+    /// <summary>Copies a video into the data folder (reusing an identical copy) and returns its relative path.</summary>
+    public string ImportVideo(string source) => ImportFile(source, VideosDir);
+
+    string ImportFile(string source, string dir)
     {
         var full = Path.GetFullPath(source);
         if (IsInside(full, WallpapersDir)) return Relative(full);
 
-        Directory.CreateDirectory(ImagesDir);
-        var dest = UniqueDestination(ImagesDir, Path.GetFileName(full), full);
+        Directory.CreateDirectory(dir);
+        var dest = UniqueDestination(dir, Path.GetFileName(full), full);
         if (!File.Exists(dest)) File.Copy(full, dest);
         return Relative(dest);
     }
@@ -88,8 +99,8 @@ public sealed class PortableStorage
         var keep = config.ReferencedPaths().Select(Resolve).ToHashSet(StringComparer.OrdinalIgnoreCase);
         try
         {
-            if (Directory.Exists(ImagesDir))
-                foreach (var file in Directory.EnumerateFiles(ImagesDir).Where(f => !keep.Contains(f)).ToList())
+            foreach (var dir in new[] { ImagesDir, VideosDir }.Where(Directory.Exists))
+                foreach (var file in Directory.EnumerateFiles(dir).Where(f => !keep.Contains(f)).ToList())
                     File.Delete(file);
             if (Directory.Exists(SlideshowsDir))
                 foreach (var dir in Directory.EnumerateDirectories(SlideshowsDir).Where(d => !keep.Contains(d)).ToList())
