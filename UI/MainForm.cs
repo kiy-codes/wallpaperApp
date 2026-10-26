@@ -51,7 +51,7 @@ internal sealed class MainForm : Form
         _app = app;
         _storage = storage;
 
-        Text = "Wallpaper App";
+        Text = $"Wallpaper App {Application.ProductVersion.Split('+')[0]}";
         Icon = AppIcon.Value;
         Font = SystemFonts.MessageBoxFont ?? Font;
         FormBorderStyle = FormBorderStyle.FixedDialog;
